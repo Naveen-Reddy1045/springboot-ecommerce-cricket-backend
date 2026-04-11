@@ -35,4 +35,6 @@ public interface ProductRepository extends JpaRepository<Product,Long> {
             @Param("maxPrice") Double maxPrice,
             Pageable pageable
     );
+
+    List<Product> findBySeller_IdAndIsActiveTrue(Long sellerId);
 }

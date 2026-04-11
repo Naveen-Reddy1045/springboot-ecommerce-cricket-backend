@@ -45,6 +45,7 @@ public class ProductService {
         product.setPrice(request.getPrice());
         product.setStock(request.getStock());
         product.setCategory(request.getCategory());
+        product.setImageUrl(request.getImageUrl());
 
         Product updated = repo.save(product);
 
@@ -72,7 +73,24 @@ public class ProductService {
                 .toList();
     }
 
+    public List<ProductResponse> getMyProducts() {
+
+        String email = SecurityContextHolder
+                .getContext()
+                .getAuthentication()
+                .getName();
+
+        User seller = userRepository.findByEmail(email)
+                .orElseThrow(() -> new ResourceNotFoundException("Seller not found"));
+
+        return repo.findBySeller_IdAndIsActiveTrue(seller.getId())
+                .stream()
+                .map(this::mapToResponse)
+                .toList();
+    }
+
     public ProductResponse addProduct(ProductRequest request) {
+
 
         String email = SecurityContextHolder
                 .getContext()
@@ -92,6 +110,7 @@ public class ProductService {
         product.setPrice(request.getPrice());
         product.setStock(request.getStock());
         product.setCategory(request.getCategory());
+        product.setImageUrl(request.getImageUrl());
         product.setSeller(seller);
         product.setIsActive(true);
 
@@ -110,6 +129,7 @@ public class ProductService {
         response.setPrice(product.getPrice());
         response.setStock(product.getStock());
         response.setCategory(product.getCategory());
+        response.setImageUrl(product.getImageUrl());
 
         response.setSellerId(product.getSeller().getId());
         response.setSellerName(product.getSeller().getName());

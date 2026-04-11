@@ -1,7 +1,6 @@
 package com.ecom.cricketshop.product.dto;
 
 import jakarta.validation.constraints.NotBlank;
-import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Positive;
 import jakarta.validation.constraints.PositiveOrZero;
 import lombok.AllArgsConstructor;
@@ -27,4 +26,6 @@ public class ProductRequest {
 
         @NotBlank(message = "Category is required")
         private String category;
+
+        private String imageUrl;
 }

@@ -1,12 +1,10 @@
 package com.ecom.cricketshop.auth.entity;
 
+import com.ecom.cricketshop.address.entity.Address;
 import com.ecom.cricketshop.auth.Role;
-import com.ecom.cricketshop.product.entity.Product;
 import jakarta.persistence.*;
-import jakarta.validation.constraints.Email;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Pattern;
-import jakarta.validation.constraints.Size;
 import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.NoArgsConstructor;
@@ -42,4 +40,7 @@ public class User {
     private Role role;
     private Boolean isActive;
     private LocalDateTime createdAt;
+
+    @OneToMany(mappedBy = "user", cascade = CascadeType.ALL, orphanRemoval = true)
+    private List<Address> addresses;
 }

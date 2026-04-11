@@ -21,6 +21,10 @@ public class Product {
     private double price;
     private int stock;
     private String category;
+    
+    @Column(length = 1000)
+    private String imageUrl;
+
     @ManyToOne
     @JoinColumn(name = "seller_id", nullable = false)
     private User seller;

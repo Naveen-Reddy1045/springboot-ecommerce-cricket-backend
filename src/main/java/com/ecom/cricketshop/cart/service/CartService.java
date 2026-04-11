@@ -71,6 +71,14 @@ public class CartService {
 
             int newQuantity = cart.getQuantity() + quantity;
 
+            if (newQuantity <= 0) {
+                cartRepository.delete(cart);
+                CartResponse res = new CartResponse();
+                res.setProductId(product.getId());
+                res.setQuantity(0);
+                return res;
+            }
+
             if (product.getStock() < newQuantity) {
                 throw new BadRequestException("Insufficient stock");
             }
@@ -78,6 +86,9 @@ public class CartService {
             cart.setQuantity(newQuantity);
 
         } else {
+            if (quantity <= 0) {
+                throw new BadRequestException("Quantity must be greater than zero");
+            }
 
             cart = new Cart();
             cart.setUser(user);
@@ -135,6 +146,7 @@ public class CartService {
         response.setProductId(cart.getProduct().getId());
         response.setProductName(cart.getProduct().getName());
         response.setPrice(cart.getProduct().getPrice());
+        response.setImageUrl(cart.getProduct().getImageUrl());
         response.setQuantity(cart.getQuantity());
         response.setSubtotal(
                 cart.getProduct().getPrice() * cart.getQuantity()

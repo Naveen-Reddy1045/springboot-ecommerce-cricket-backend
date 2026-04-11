@@ -2,7 +2,6 @@ package com.ecom.cricketshop.product.controller;
 import com.ecom.cricketshop.common.ApiResponse;
 import com.ecom.cricketshop.product.dto.ProductRequest;
 import com.ecom.cricketshop.product.dto.ProductResponse;
-import com.ecom.cricketshop.product.entity.Product;
 import com.ecom.cricketshop.product.service.ProductService;
 import jakarta.validation.Valid;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -49,7 +48,14 @@ public class ProductController {
         return service.findByKeyword(key);
     }
 
+    @GetMapping("/seller/products")
+    public ResponseEntity<ApiResponse<List<ProductResponse>>> getMyProducts() {
+        List<ProductResponse> products = service.getMyProducts();
+        return ResponseEntity.ok(new ApiResponse<>(true, "Seller products fetched", products));
+    }
+
     @PostMapping("/seller/products")
+
     public ResponseEntity<ApiResponse<ProductResponse>> addProduct(
             @Valid @RequestBody ProductRequest request) {
 

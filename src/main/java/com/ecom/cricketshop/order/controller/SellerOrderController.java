@@ -31,4 +31,15 @@ public class SellerOrderController {
 
         return orderService.updateOrderStatus(orderId, status);
     }
+
+    // Update a single item's status
+    @PutMapping("/{orderId}/items/{itemId}/status")
+    @Transactional
+    public OrderResponse updateItemStatus(
+            @PathVariable Long orderId,
+            @PathVariable Long itemId,
+            @RequestParam OrderStatus status) {
+
+        return orderService.updateItemStatus(orderId, itemId, status);
+    }
 }

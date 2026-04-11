@@ -1,5 +1,6 @@
 package com.ecom.cricketshop.order.entity;
 
+import com.ecom.cricketshop.order.OrderStatus;
 import com.ecom.cricketshop.product.entity.Product;
 import com.fasterxml.jackson.annotation.JsonIgnore;
 import jakarta.persistence.*;
@@ -28,4 +29,7 @@ public class OrderItem {
     private int quantity;
 
     private double price;
+
+    @Enumerated(EnumType.STRING)
+    private OrderStatus itemStatus;
 }

@@ -1,5 +1,7 @@
 package com.ecom.cricketshop.order.service;
 
+import com.ecom.cricketshop.address.entity.Address;
+import com.ecom.cricketshop.address.repo.AddressRepository;
 import com.ecom.cricketshop.auth.Role;
 import com.ecom.cricketshop.auth.entity.User;
 import com.ecom.cricketshop.auth.repo.UserRepository;
@@ -12,6 +14,7 @@ import com.ecom.cricketshop.order.dto.OrderItemResponse;
 import com.ecom.cricketshop.order.dto.OrderResponse;
 import com.ecom.cricketshop.order.entity.Order;
 import com.ecom.cricketshop.order.entity.OrderItem;
+import com.ecom.cricketshop.order.repo.OrderItemRepository;
 import com.ecom.cricketshop.order.repo.OrderRepository;
 import com.ecom.cricketshop.product.entity.Product;
 import com.ecom.cricketshop.product.repo.ProductRepository;
@@ -40,7 +43,14 @@ public class OrderService {
     @Autowired
     private ProductRepository productRepository;
 
+    @Autowired
+    private OrderItemRepository orderItemRepository;
 
+    @Autowired
+    private AddressRepository addressRepository;
+
+
+    @Transactional
     public OrderResponse placeOrder() {
 
         String email = SecurityContextHolder
@@ -51,20 +61,34 @@ public class OrderService {
         User user = userRepository.findByEmail(email)
                 .orElseThrow(() -> new ResourceNotFoundException("User not found"));
 
-        if (user.getRole() != Role.USER) {
-            throw new BadRequestException("Only buyers can place orders");
-        }
-
         List<Cart> cartItems = cartRepository.findByUser(user);
 
         if (cartItems.isEmpty()) {
             throw new BadRequestException("Cart is empty");
         }
 
+        // Fetch default address
+        Address defaultAddress = addressRepository.findByUser(user)
+                .stream()
+                .filter(Address::isDefault)
+                .findFirst()
+                .orElseThrow(() -> new BadRequestException("Default address not set"));
+
         Order order = new Order();
         order.setUser(user);
         order.setCreatedAt(LocalDateTime.now());
         order.setOrderStatus(OrderStatus.PLACED);
+
+        // Store snapshot
+        String addressSnapshot =
+                defaultAddress.getFullName() + "\n" +
+                        defaultAddress.getPhoneNumber() + "\n" +
+                        defaultAddress.getAddressLine() + "\n" +
+                        defaultAddress.getCity() + ", " +
+                        defaultAddress.getState() + " - " +
+                        defaultAddress.getPincode();
+
+        order.setShippingAddress(addressSnapshot);
 
         List<OrderItem> orderItems = new ArrayList<>();
         double total = 0;
@@ -73,33 +97,23 @@ public class OrderService {
 
             Product product = cart.getProduct();
 
-            if (!Boolean.TRUE.equals(product.getIsActive())) {
-                throw new BadRequestException(
-                        "Product not available: " + product.getName()
-                );
+            if (!product.getIsActive()) {
+                throw new BadRequestException("Product inactive: " + product.getName());
             }
 
             if (cart.getQuantity() > product.getStock()) {
-                throw new BadRequestException(
-                        "Insufficient stock for: " + product.getName()
-                );
+                throw new BadRequestException("Insufficient stock for: " + product.getName());
             }
 
-            // reduce stock
-            try {
-                product.setStock(product.getStock() - cart.getQuantity());
-                productRepository.save(product);
-            } catch (ObjectOptimisticLockingFailureException e) {
-                throw new BadRequestException(
-                        "Product stock changed. Please try again."
-                );
-            }
+            product.setStock(product.getStock() - cart.getQuantity());
+            productRepository.save(product);
 
             OrderItem item = new OrderItem();
             item.setOrder(order);
             item.setProduct(product);
             item.setQuantity(cart.getQuantity());
             item.setPrice(product.getPrice());
+            item.setItemStatus(OrderStatus.PLACED);
 
             total += product.getPrice() * cart.getQuantity();
             orderItems.add(item);
@@ -108,13 +122,13 @@ public class OrderService {
         order.setTotalPrice(total);
         order.setOrderItems(orderItems);
 
-        Order saved = orderRepository.save(order);
+        Order savedOrder = orderRepository.save(order);
 
-        // clear cart after successful order
         cartRepository.deleteAll(cartItems);
 
-        return mapToOrderResponse(saved);
+        return mapToOrderResponse(savedOrder);
     }
+
     public List<OrderResponse> getMyOrders() {
 
         String email = SecurityContextHolder
@@ -148,7 +162,7 @@ public class OrderService {
         return orderRepository
                 .findDistinctByOrderItemsProductSellerId(seller.getId())
                 .stream()
-                .map(this::mapToOrderResponse)
+                .map(order -> mapToSellerOrderResponse(order, seller.getId()))
                 .toList();
     }
 
@@ -169,23 +183,61 @@ public class OrderService {
         Order order = orderRepository.findById(orderId)
                 .orElseThrow(() -> new ResourceNotFoundException("Order not found"));
 
-        boolean ownsProduct = order.getOrderItems()
-                .stream()
-                .anyMatch(item ->
-                        item.getProduct()
-                                .getSeller()
-                                .getId()
-                                .equals(seller.getId())
-                );
+        // Find only this seller's items in the order
+        List<OrderItem> sellerItems = orderItemRepository
+                .findByOrderIdAndProductSellerId(orderId, seller.getId());
 
-        if (!ownsProduct) {
-            throw new BadRequestException("You cannot update this order");
+        if (sellerItems.isEmpty()) {
+            throw new BadRequestException("You have no products in this order");
         }
 
-        order.setOrderStatus(status);
+        // Update status only on seller's own items
+        sellerItems.forEach(item -> item.setItemStatus(status));
+        orderItemRepository.saveAll(sellerItems);
+        
+        syncOrderStatus(orderId);
 
-        return mapToOrderResponse(orderRepository.save(order));
+        return mapToSellerOrderResponse(order, seller.getId());
     }
+
+    public OrderResponse updateItemStatus(Long orderId, Long itemId, OrderStatus status) {
+
+        String email = SecurityContextHolder
+                .getContext()
+                .getAuthentication()
+                .getName();
+
+        User seller = userRepository.findByEmail(email)
+                .orElseThrow(() -> new ResourceNotFoundException("Seller not found"));
+
+        if (seller.getRole() != Role.SELLER) {
+            throw new BadRequestException("Only sellers can update item status");
+        }
+
+        Order order = orderRepository.findById(orderId)
+                .orElseThrow(() -> new ResourceNotFoundException("Order not found"));
+
+        OrderItem item = orderItemRepository.findById(itemId)
+                .orElseThrow(() -> new ResourceNotFoundException("Order item not found"));
+
+        // Verify this item belongs to this order
+        if (!item.getOrder().getId().equals(orderId)) {
+            throw new BadRequestException("This item does not belong to the specified order");
+        }
+
+        // Verify this seller owns the product in this item
+        if (!item.getProduct().getSeller().getId().equals(seller.getId())) {
+            throw new BadRequestException("You do not own this product");
+        }
+
+        item.setItemStatus(status);
+        orderItemRepository.save(item);
+        
+        syncOrderStatus(orderId);
+
+        return mapToSellerOrderResponse(order, seller.getId());
+    }
+
 
     @Transactional
     public OrderResponse cancelOrder(Long orderId) {
@@ -232,16 +284,60 @@ public class OrderService {
         return mapToOrderResponse(orderRepository.save(order));
     }
 
+    private void syncOrderStatus(Long orderId) {
+        Order order = orderRepository.findById(orderId).orElse(null);
+        if (order == null) return;
+
+        List<OrderItem> items = orderItemRepository.findByOrderId(orderId);
+        if (items == null || items.isEmpty()) return;
+
+        boolean anyPlaced = false;
+        boolean anyShipping = false;
+        boolean anyDelivered = false;
+        boolean allCancelled = true;
+
+        for (OrderItem item : items) {
+            OrderStatus s = item.getItemStatus();
+            if (s == null) s = OrderStatus.PLACED; // Default
+
+            if (s != OrderStatus.CANCELLED) {
+                allCancelled = false;
+            }
+
+            if (s == OrderStatus.PLACED) anyPlaced = true;
+            else if (s == OrderStatus.SHIPPING) anyShipping = true;
+            else if (s == OrderStatus.DELIVERED) anyDelivered = true;
+        }
+
+        OrderStatus newStatus;
+        if (allCancelled) {
+            newStatus = OrderStatus.CANCELLED;
+        } else if (anyPlaced) {
+            newStatus = OrderStatus.PLACED;
+        } else if (anyShipping) {
+            newStatus = OrderStatus.SHIPPING;
+        } else {
+            newStatus = OrderStatus.DELIVERED;
+        }
+
+        if (order.getOrderStatus() != newStatus) {
+            order.setOrderStatus(newStatus);
+            orderRepository.save(order);
+        }
+    }
+
     private OrderResponse mapToOrderResponse(Order order) {
 
         List<OrderItemResponse> items = order.getOrderItems()
                 .stream()
                 .map(item -> new OrderItemResponse(
+                        item.getId(),
                         item.getProduct().getId(),
                         item.getProduct().getName(),
                         item.getQuantity(),
                         item.getPrice(),
-                        item.getPrice() * item.getQuantity()
+                        item.getPrice() * item.getQuantity(),
+                        item.getItemStatus()
                 ))
                 .toList();
 
@@ -250,6 +346,45 @@ public class OrderService {
                 order.getCreatedAt(),
                 order.getOrderStatus(),
                 order.getTotalPrice(),
+                items
+        );
+    }
+    private OrderResponse mapToSellerOrderResponse(Order order, Long sellerId) {
+
+        List<OrderItemResponse> items = order.getOrderItems()
+                .stream()
+                .filter(item -> item.getProduct().getSeller().getId().equals(sellerId))
+                .map(item -> new OrderItemResponse(
+                        item.getId(),
+                        item.getProduct().getId(),
+                        item.getProduct().getName(),
+                        item.getQuantity(),
+                        item.getPrice(),
+                        item.getPrice() * item.getQuantity(),
+                        item.getItemStatus()
+                ))
+                .toList();
+
+        double sellerTotal = items.stream().mapToDouble(OrderItemResponse::getSubtotal).sum();
+
+        // Derive a representative status from seller's items
+        OrderStatus derivedStatus = items.stream()
+                .map(OrderItemResponse::getItemStatus)
+                .filter(s -> s != null)
+                .reduce((a, b) -> {
+                    // Worst-case propagation: PLACED > SHIPPING > DELIVERED > CANCELLED
+                    if (a == OrderStatus.PLACED || b == OrderStatus.PLACED) return OrderStatus.PLACED;
+                    if (a == OrderStatus.SHIPPING || b == OrderStatus.SHIPPING) return OrderStatus.SHIPPING;
+                    if (a == OrderStatus.DELIVERED || b == OrderStatus.DELIVERED) return OrderStatus.DELIVERED;
+                    return OrderStatus.CANCELLED;
+                })
+                .orElse(OrderStatus.PLACED);
+
+        return new OrderResponse(
+                order.getId(),
+                order.getCreatedAt(),
+                derivedStatus,
+                sellerTotal,
                 items
         );
     }

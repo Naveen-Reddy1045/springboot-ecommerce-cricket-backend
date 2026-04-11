@@ -4,6 +4,7 @@ import com.ecom.cricketshop.security.JwtAuthenticationFilter;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.security.config.Customizer;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
@@ -28,10 +29,12 @@ public class AppConfig {
         public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
 
             http
+                    .cors(Customizer.withDefaults())
                     .csrf(csrf -> csrf.disable())
                     .authorizeHttpRequests(auth -> auth
 
                             // Public endpoints
+                            .requestMatchers(org.springframework.http.HttpMethod.OPTIONS, "/**").permitAll()
                             .requestMatchers("/auth/**").permitAll()
                             .requestMatchers("/products/**").permitAll()
 
@@ -39,6 +42,7 @@ public class AppConfig {
                             .requestMatchers("/seller/**").hasRole("SELLER")
                             .requestMatchers("/admin/**").hasRole("ADMIN")
                             .requestMatchers("/buyer/**").hasRole("USER")
+                            .requestMatchers("/buyer/address/**").hasRole("USER")
 
                             // Everything else authenticated
                             .anyRequest().authenticated()
