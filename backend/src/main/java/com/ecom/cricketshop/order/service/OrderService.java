@@ -129,6 +129,7 @@ public class OrderService {
         return mapToOrderResponse(savedOrder);
     }
 
+    @Transactional
     public List<OrderResponse> getMyOrders() {
 
         String email = SecurityContextHolder
@@ -191,6 +192,14 @@ public class OrderService {
             throw new BadRequestException("You have no products in this order");
         }
 
+        // Validate transitions first
+        for (OrderItem item : sellerItems) {
+            if (!isValidTransition(item.getItemStatus(), status)) {
+                throw new BadRequestException("Cannot transition item from " + 
+                        (item.getItemStatus() != null ? item.getItemStatus() : OrderStatus.PLACED) + " to " + status);
+            }
+        }
+
         // Update status only on seller's own items
         sellerItems.forEach(item -> item.setItemStatus(status));
         orderItemRepository.saveAll(sellerItems);
@@ -228,6 +237,12 @@ public class OrderService {
         // Verify this seller owns the product in this item
         if (!item.getProduct().getSeller().getId().equals(seller.getId())) {
             throw new BadRequestException("You do not own this product");
+        }
+
+        // Validate transition
+        if (!isValidTransition(item.getItemStatus(), status)) {
+            throw new BadRequestException("Cannot transition item from " + 
+                    (item.getItemStatus() != null ? item.getItemStatus() : OrderStatus.PLACED) + " to " + status);
         }
 
         item.setItemStatus(status);
@@ -269,7 +284,7 @@ public class OrderService {
             throw new BadRequestException("Order already cancelled");
         }
 
-        // Restore stock
+        // Restore stock and cancel items
         for (OrderItem item : order.getOrderItems()) {
 
             Product product = item.getProduct();
@@ -277,11 +292,30 @@ public class OrderService {
             product.setStock(product.getStock() + item.getQuantity());
 
             productRepository.save(product);
+
+            item.setItemStatus(OrderStatus.CANCELLED);
         }
 
         order.setOrderStatus(OrderStatus.CANCELLED);
 
         return mapToOrderResponse(orderRepository.save(order));
+    }
+
+    private boolean isValidTransition(OrderStatus current, OrderStatus next) {
+        if (current == null) {
+            current = OrderStatus.PLACED;
+        }
+        if (current == next) {
+            return true;
+        }
+        if (current == OrderStatus.CANCELLED || current == OrderStatus.DELIVERED) {
+            return false;
+        }
+        if (current == OrderStatus.SHIPPING) {
+            return next == OrderStatus.DELIVERED || next == OrderStatus.CANCELLED;
+        }
+        // current is PLACED, can transition to any other status
+        return true;
     }
 
     private void syncOrderStatus(Long orderId) {
@@ -290,6 +324,19 @@ public class OrderService {
 
         List<OrderItem> items = orderItemRepository.findByOrderId(orderId);
         if (items == null || items.isEmpty()) return;
+
+        OrderStatus newStatus = calculateOrderStatus(items);
+
+        if (order.getOrderStatus() != newStatus) {
+            order.setOrderStatus(newStatus);
+            orderRepository.save(order);
+        }
+    }
+
+    private OrderStatus calculateOrderStatus(List<OrderItem> items) {
+        if (items == null || items.isEmpty()) {
+            return OrderStatus.PLACED;
+        }
 
         boolean anyPlaced = false;
         boolean anyShipping = false;
@@ -309,24 +356,24 @@ public class OrderService {
             else if (s == OrderStatus.DELIVERED) anyDelivered = true;
         }
 
-        OrderStatus newStatus;
         if (allCancelled) {
-            newStatus = OrderStatus.CANCELLED;
+            return OrderStatus.CANCELLED;
         } else if (anyPlaced) {
-            newStatus = OrderStatus.PLACED;
+            return OrderStatus.PLACED;
         } else if (anyShipping) {
-            newStatus = OrderStatus.SHIPPING;
+            return OrderStatus.SHIPPING;
         } else {
-            newStatus = OrderStatus.DELIVERED;
-        }
-
-        if (order.getOrderStatus() != newStatus) {
-            order.setOrderStatus(newStatus);
-            orderRepository.save(order);
+            return OrderStatus.DELIVERED;
         }
     }
 
     private OrderResponse mapToOrderResponse(Order order) {
+        // Enforce synchronization on retrieval
+        OrderStatus calculatedStatus = calculateOrderStatus(order.getOrderItems());
+        if (order.getOrderStatus() != calculatedStatus) {
+            order.setOrderStatus(calculatedStatus);
+            orderRepository.save(order);
+        }
 
         List<OrderItemResponse> items = order.getOrderItems()
                 .stream()
@@ -344,7 +391,7 @@ public class OrderService {
         return new OrderResponse(
                 order.getId(),
                 order.getCreatedAt(),
-                order.getOrderStatus(),
+                calculatedStatus,
                 order.getTotalPrice(),
                 items
         );
